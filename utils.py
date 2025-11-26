@@ -59,3 +59,14 @@ def load_public_key(id: str):
     public_key_path = os.path.join(KEYS_DIR, f"{id.lower()}_rsa.pub")
     with open(public_key_path, "rb") as key_file:
         return serialization.load_pem_public_key(key_file.read())
+
+
+
+def socket_close(sock: socket.socket):
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except Exception as e:
+        print(f"[SocketClose] Error during shutdown: {e}")
+    finally:
+        sock.close()
+        print("[SocketClose] Socket closed.")
