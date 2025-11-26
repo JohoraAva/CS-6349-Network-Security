@@ -18,7 +18,7 @@ def ensure_keys_exist(id: str):
         print(f"[KeyGen] Keys for '{id}' already exist.")
         return private_key_path
     
-    os.makedirs("Keys", exist_ok=True)
+    os.makedirs("keys", exist_ok=True)
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     public_key = private_key.public_key()
 
@@ -41,7 +41,6 @@ def ensure_keys_exist(id: str):
 
 def load_private_key(id: str):
     private_key_path = ensure_keys_exist(id)
-    # key_path = f"Keys/{id.lower()}_rsa"
     with open(private_key_path, "rb") as key_file:
         return serialization.load_pem_private_key(key_file.read(), password=None)
 
