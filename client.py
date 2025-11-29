@@ -54,9 +54,12 @@ def client():
         send_id = input("id > ").strip()
         if send_id.lower() == "exit":
             print("Exiting...")
-            break
-        msg = input("Message: ").strip()
+            msg = ""
+        else:
+            msg = input("Message: ").strip()
         s.sendall(f"{send_id}|{msg}".encode())
+        if send_id.lower() == "exit":
+            break
     s.close()
 
 if __name__ == "__main__":

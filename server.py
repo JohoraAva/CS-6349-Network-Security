@@ -61,6 +61,9 @@ def handle_client(c, addr):
                 break
             rec_id, msg = msg_data.split(b"|", 1)
             rec_id_str = rec_id.decode()
+            if rec_id_str=="exit":
+                print(f"[Relay] {id_str} leaving")
+                return
             print(f"[Relay] Message from {id_str} to {rec_id_str}")
             chat = id + b"|"+ msg
             send_to_client(rec_id_str, chat)
@@ -73,7 +76,7 @@ def all_client(s):
     while True:
         c, addr = s.accept()
         threading.Thread(target=handle_client, args=(c, addr), daemon=True).start()
-        c.close()
+        # c.close()
 
 
 
@@ -81,11 +84,12 @@ def relay():
     s = socket.socket()
     s.bind((HOST, PORT))
     s.listen(50)
-    threading.Thread(target=all_clients, args=(s), daemon=True).start()
+    threading.Thread(target=all_client, args=(s,), daemon=True).start()
     while True:
         msg = input()
         if msg == "exit":
             s.close()
+            break
 
 if __name__ == "__main__":
     relay()

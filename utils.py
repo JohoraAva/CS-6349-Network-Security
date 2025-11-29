@@ -5,7 +5,7 @@ from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 HOST = '127.0.0.1'
-PORT = 5565
+PORT = 5550
 KEYS_DIR = "keys"
 RELAY_PRIVATE_KEY_PATH = "keys/relay_rsa"
 
