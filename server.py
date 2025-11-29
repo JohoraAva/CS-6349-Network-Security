@@ -69,7 +69,11 @@ def handle_client(c, addr):
         return
     
 
-
+def all_client(s):
+    while True:
+        c, addr = s.accept()
+        threading.Thread(target=handle_client, args=(c, addr), daemon=True).start()
+        c.close()
 
 
 
@@ -77,13 +81,11 @@ def relay():
     s = socket.socket()
     s.bind((HOST, PORT))
     s.listen(50)
-
-
+    threading.Thread(target=all_clients, args=(s), daemon=True).start()
     while True:
-        c, addr = s.accept()
-        threading.Thread(target=handle_client, args=(c, addr), daemon=True).start()
-        # c.close()
-    s.close()
+        msg = input()
+        if msg == "exit":
+            s.close()
 
 if __name__ == "__main__":
     relay()
