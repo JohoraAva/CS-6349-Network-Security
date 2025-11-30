@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 HOST = '127.0.0.1'
-PORT = 5552
+PORT = 5555
 KEYS_DIR = "keys"
 RELAY_PRIVATE_KEY_PATH = "keys/relay_rsa"
 
@@ -49,6 +49,19 @@ def load_private_key(id: str):
 
 def sign_message(private_key, message: bytes) -> bytes:
     return private_key.sign(message, padding.PKCS1v15(), hashes.SHA256())
+
+def unsign_message(public_key, signature: bytes) -> bytes:
+    try:
+        recovered = public_key.recover_data_from_signature(
+            signature,
+            padding.PKCS1v15(),
+            utils.Prehashed(hashes.SHA256())  # or the hash you used
+        )
+        return recovered
+    except Exception as e:
+        raise ValueError("Message cannot be recovered from this signature") from e
+
+
 
 def verify_signature(public_key, message: bytes, signature: bytes) -> bool:
     try:
