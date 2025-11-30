@@ -2,8 +2,6 @@ from utils import *
 
   
 
-
-
 def send_registration(s: socket.socket, id: str, private_key):
     flag = b"00"
     id_bytes = id.encode()
@@ -32,12 +30,23 @@ def establish_socket():
     print(f"Connected to server at {HOST}:{PORT}")
     return s, id, private_key
 
-def receive(s):
+def receive(s,private_key):
     while True:
         try:
             data = s.recv(1024)
-            send_id, msg = data.split(b"|", 1)
-            print(f"\n[{send_id.decode()}]: {msg.decode()}\nid > ")
+            flag,src_id,dst_id, msg = data.split(b"|", 3)
+            if flag == b"01":
+                p, g, enc = msg.split(b"|",2)
+                # calculate session params
+                session_establish_response(s,dst_id.decode(),src_id.decode(),private_key)
+            elif flag == b"10":
+                p, g, enc = msg.split(b"|",2)
+                # verify session params
+                # calculate session params
+            elif flag == b"11":
+                print(f"\n[{src_id.decode()}]: {msg.decode()}\nid > ", end="")
+            else:
+                print(f"[{src_id}] Invalid flag")
         except:
             break
 
@@ -48,17 +57,20 @@ def client():
         print("Registration failed.")
         s.close()
         return
-    threading.Thread(target=receive, args=(s,), daemon=True).start()
+    threading.Thread(target=receive, args=(s,private_key,), daemon=True).start()
 
     while True:
-        send_id = input("id > ").strip()
-        if send_id.lower() == "exit":
+        dst_id = input("id > ").strip()
+        if dst_id.lower() == "exit":
             print("Exiting...")
             msg = ""
         else:
             msg = input("Message: ").strip()
-        s.sendall(f"{send_id}|{msg}".encode())
-        if send_id.lower() == "exit":
+        if msg == "session init":
+            session_establish_request(s, id, dst_id, private_key)
+        else:
+            s.sendall(f"11|{id}|{dst_id}|{msg}".encode())
+        if dst_id.lower() == "exit":
             break
     s.close()
 
