@@ -33,18 +33,25 @@ def establish_socket():
 def receive(s,private_key):
     while True:
         try:
-            data = s.recv(1024)
-            flag,src_id,dst_id, msg = data.split(b"|", 3)
+            data = s.recv(4096)
+            flag,src_id_b,dst_id_b, msg = data.split(b"|", 3)
+            src_id = src_id_b.decode()
+            dst_id = dst_id_b.decode()
             if flag == b"01":
-                p, g, enc = msg.split(b"|",2)
+
+                # p, g, enc = msg.split(b"|",2)
+                print(f"[{src_id}] Session establishment request received.")
+                print(handle_session_establish_request(msg, src_id, dst_id, private_key))
+                print("# eikhane ashche")
                 # calculate session params
-                session_establish_response(s,dst_id.decode(),src_id.decode(),private_key)
+                session_establish_response(s,dst_id,src_id,private_key)
             elif flag == b"10":
                 p, g, enc = msg.split(b"|",2)
+                print(f"[{src_id}] Session establishment response received.")
                 # verify session params
                 # calculate session params
             elif flag == b"11":
-                print(f"\n[{src_id.decode()}]: {msg.decode()}\nid > ", end="")
+                print(f"\n[{src_id}]: {msg.decode()}\nid > ", end="")
             else:
                 print(f"[{src_id}] Invalid flag")
         except:
@@ -67,7 +74,7 @@ def client():
         else:
             msg = input("Message: ").strip()
         if msg == "session init":
-            session_establish_request(s, id, dst_id, private_key)
+            print(session_establish_request(s, id, dst_id, private_key))
         else:
             s.sendall(f"11|{id}|{dst_id}|{msg}".encode())
         if dst_id.lower() == "exit":

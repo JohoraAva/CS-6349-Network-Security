@@ -80,9 +80,9 @@ def get_dh_params():
     return p, g
 
 def generate_dh_keypair(p: int, g: int):
-    private_key = int.from_bytes(os.urandom(256), byteorder='big') % p
-    public_key = pow(g, private_key, p)
-    return public_key, private_key
+    R_pri = int.from_bytes(os.urandom(256), byteorder='big') % p
+    R_pub = pow(g, R_pri, p)
+    return R_pub, R_pri
 
 def encrypt_message(public_key, message: bytes) :
     # Hybrid RSA-AES: encrypt a random AES key with the recipient's RSA public key,
@@ -102,75 +102,171 @@ def encrypt_message(public_key, message: bytes) :
     )
     return enc_key + nonce + ciphertext
 
-def session_establish_request(s: socket.socket, src_id_str: str, dst_id_str: str, private_key) :
+def decrypt_message(private_key, data: bytes):
+    """
+    Reverse of encrypt_message():
+    data format = enc_key || nonce || ciphertext
+
+    - enc_key: RSA-encrypted AES key (length = RSA modulus size in bytes)
+    - nonce: 12 bytes
+    - ciphertext: AES-GCM encrypted payload
+    """
+
+    rsa_key_size = private_key.key_size // 8  # size in bytes (e.g., 2048 bits → 256 bytes)
+
+    print("here3")
+    print("here2")
+    print("here1")
+    enc_key = data[:rsa_key_size]
+    nonce = data[rsa_key_size:rsa_key_size + 12]
+    ciphertext = data[rsa_key_size + 12:]
+
+    print("here4")
+    # Recover AES key
+    aes_key = private_key.decrypt(
+        enc_key,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+    print("here5")
+    aesgcm = AESGCM(aes_key)
+    print("here6")
+    plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+    print("here7")
+    # print("# ", plaintext)
+    return plaintext
+
+def hashyyy(hash_input):
+    return hash_input
+
+def session_establish_request(s: socket.socket, src_id: str, dst_id: str, private_key):
     flag = b"01"
-    src_id = src_id_str.encode()
-    dst_id = dst_id_str.encode()
-    sess_msg = b"Session establishment request from " + src_id + b" to " + dst_id
-    # timestamp 
-    ts = str(time.time()).encode()
+    ts_req = f"{time.time():024.6f}".encode()
+    print("# ts_req : ", len(ts_req))
+
     # generate session key using DH
-    p,g = get_dh_params()
-    pub_key, priv_key = generate_dh_keypair(p, g)
-    # hash(ts || pub_key)
-    hash_input = ts + pub_key.to_bytes((pub_key.bit_length() + 7) // 8, byteorder='big')
-    hashed_msg = hash(hash_input)
-    # print(type(ts), type(pub_key), type(hashed_msg))
-    pub_key = pub_key.to_bytes((pub_key.bit_length() + 7) // 8, byteorder='big')
-    # pub_bytes = pub_key.public_bytes(
-    # encoding=serialization.Encoding.DER,
-    # format=serialization.PublicFormat.SubjectPublicKeyInfo)
+    p, g = get_dh_params()
+    R_pub, R_pri = generate_dh_keypair(p, g)
+
+    R_pub_b = R_pub.to_bytes((R_pub.bit_length() + 7) // 8, "big")
+    # print("# R_pub_b : ", len(R_pub_b))
+
+    hash_input = ts_req + R_pub_b
+    hashed_msg = hashyyy(hash_input)
+
+    # sign_input = ts_req + b"|" + R_pub_b + b"|" + hashed_msg.to_bytes(32, "big", signed=True)
+
+    print(f"sign kortese {src_id}")
+    signed_msg = hash_input + sign_message(private_key, hashed_msg)
 
 
-    sign_msg_input = ts +pub_key + hashed_msg.to_bytes(32, byteorder='big', signed=True)
-    signed_msg = sign_message(private_key, sign_msg_input)
-    dest_pub_key = load_public_key(dst_id_str)
-    enc_msg = encrypt_message(dest_pub_key, signed_msg)
-    # encrypt signed_msg with B's public key
-    # signed_msg = sign_message(private_key, sess_msg)
-    # print("type: ", type(flag), type(src_id), type(dst_id), type(p), type(g), type(enc_msg))
 
-    p_bytes_len = (p.bit_length() + 7) // 8   # 256 bytes for 2048-bit p
-    g_bytes_len = (g.bit_length() + 7) // 8   # 1 byte for g=2
+    print("# msg: ", ts_req+R_pub_b)
+    print("# msg: ", hashed_msg)
+    print("# msg: ", sign_message(private_key, hashed_msg))
 
-    # payload = flag + b"|" + src_id + b"|" + dst_id + b"|" + p.to_bytes(p_bytes_len, byteorder='big', signed=False)+ "|"+g.to_bytes(g_bytes_len, byteorder='big', signed=False)+ "|"+ enc_msg
-    p_bytes = p.to_bytes(p_bytes_len, byteorder='big', signed=False)
-    g_bytes = g.to_bytes(g_bytes_len, byteorder='big', signed=False)
-    payload = (
-    flag + b"|" + src_id + b"|" + dst_id + b"|" +
-    len(p_bytes).to_bytes(2,'big') + p.to_bytes(p_bytes_len, byteorder='big', signed=False) +
-    len(g_bytes).to_bytes(1,'big') + g.to_bytes(g_bytes_len, byteorder='big', signed=False) +
-    enc_msg)
-    # print(payload)
+    dst_pub = load_public_key(dst_id)
+    enc_msg = encrypt_message(dst_pub, signed_msg)
+
+    # print("# enc_msg: ", enc_msg)
+
+    p_bytes = p.to_bytes((p.bit_length() + 7) // 8, "big")
+    g_bytes = g.to_bytes((g.bit_length() + 7) // 8, "big")
+
+    payload = b"|".join([
+        flag,
+        src_id.encode(),
+        dst_id.encode(),
+        p_bytes+
+        g_bytes+
+        enc_msg
+    ])
+
     s.sendall(payload)
-    print(f"[+] Session establishment request sent from {src_id_str} to {dst_id_str}")
+    print(f"[+] Session establishment request sent from {src_id} to {dst_id}")
+    return R_pub, R_pri
 
-def session_establish_response(s: socket.socket, src_id_str: str, dst_id_str: str, private_key) :
+
+def handle_session_establish_request(data: bytes, src_id: str, dst_id: str, private_key):
+
+    p_bytes    = data[:256]
+    g_bytes    = data[256:257]
+    enc_msg    = data[257:]
+
+
+    # ---------- 2. Reconstruct DH parameters ----------
+    p = int.from_bytes(p_bytes, "big")
+    g = int.from_bytes(g_bytes, "big")
+
+    signed_msg = decrypt_message(private_key, enc_msg)
+
+    ts_req = signed_msg[:24]
+    R_pub_b = signed_msg[24:24+256]
+    signed_part = signed_msg[24+256:]
+
+    # print("# ts_req: ", ts_req)
+    # print("# R_pub_b: ", R_pub_b)
+    # print("# signed_part: ", signed_part)
+    # msg = signed_msg[:18+256]
+
+    print(f"sign kortese {src_id}")
+    print("# msg: ", ts_req+R_pub_b)
+    # print("# msg: ", hashyyy(ts_req+R_pub_b))
+    print("# msg: ", signed_part)
+    print()
+
+    # signed_msg format:
+    # ts_req | R_pub | hashed_msg
+    #
+    # But ts_req has variable length, R_pub has variable length, so the request
+    # used a "|" separator.
+
+    print("de--------bisldkj")
+
+
+    valid_signature = verify_signature(load_public_key(src_id),hashyyy(ts_req+R_pub_b),signed_part)
+
+    # ---------- 6. Reconstruct R_pub ----------
+    R_pub = int.from_bytes(R_pub_b, "big")
+
+    if valid_signature == False:
+        return None
+
+    return src_id, dst_id, p, g, ts_req.decode()
+
+def session_establish_response(s: socket.socket, src_id: str, dst_id: str, private_key):
     flag = b"10"
-    src_id = src_id_str.encode()
-    dst_id = dst_id_str.encode()
-    ts = str(time.time()).encode()
-    p,g = get_dh_params()
-    pub_key, priv_key = generate_dh_keypair(p, g)
-    hash_input = ts + pub_key.to_bytes((pub_key.bit_length() + 7) // 8, byteorder='big')
+    ts_req = str(time.time()).encode()
+
+    # generate session key using DH
+    p, g = get_dh_params()
+    R_pub, R_pri = generate_dh_keypair(p, g)
+
+    R_pub_b = R_pub.to_bytes((R_pub.bit_length() + 7) // 8, "big")
+
+    hash_input = ts_req + b"|" + R_pub_b
     hashed_msg = hash(hash_input)
-    pub_key = pub_key.to_bytes((pub_key.bit_length() + 7) // 8, byteorder='big')
 
+    sign_input = ts_req + b"|" + R_pub_b + b"|" + hashed_msg.to_bytes(32, "big", signed=True)
+    signed_msg = sign_message(private_key, sign_input)
 
-    sign_msg_input = ts +pub_key + hashed_msg.to_bytes(32, byteorder='big', signed=True)
-    signed_msg = sign_message(private_key, sign_msg_input)
-    dest_pub_key = load_public_key(dst_id_str)
-    enc_msg = encrypt_message(dest_pub_key, signed_msg)
+    dst_pub = load_public_key(dst_id)
+    enc_msg = encrypt_message(dst_pub, signed_msg)
 
-    p_bytes_len = (p.bit_length() + 7) // 8   # 256 bytes for 2048-bit p
-    g_bytes_len = (g.bit_length() + 7) // 8   # 1 byte for g=2
+    p_bytes = p.to_bytes((p.bit_length() + 7) // 8, "big")
+    g_bytes = g.to_bytes((g.bit_length() + 7) // 8, "big")
 
-    p_bytes = p.to_bytes(p_bytes_len, byteorder='big', signed=False)
-    g_bytes = g.to_bytes(g_bytes_len, byteorder='big', signed=False)
-    payload = (
-    flag + b"|" + src_id + b"|" + dst_id + b"|" +
-    len(p_bytes).to_bytes(2,'big') + p.to_bytes(p_bytes_len, byteorder='big', signed=False) +
-    len(g_bytes).to_bytes(1,'big') + g.to_bytes(g_bytes_len, byteorder='big', signed=False) +
-    enc_msg)
+    payload = b"|".join([
+        flag,
+        src_id.encode(),
+        dst_id.encode(),
+        p_bytes,
+        g_bytes,
+        enc_msg
+    ])
+
     s.sendall(payload)
-    print(f"[+] Session establishment response sent from {src_id_str} to {dst_id_str}")
+    print(f"[+] Session establishment response sent from {src_id} to {dst_id}")

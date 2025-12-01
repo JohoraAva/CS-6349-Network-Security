@@ -74,6 +74,7 @@ def all_client(s):
 
 
 def relay():
+    p, g = get_dh_params()
     s = socket.socket()
     s.bind((HOST, PORT))
     s.listen(50)
