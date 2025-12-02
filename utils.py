@@ -3,6 +3,7 @@ import socket
 import threading
 import sys
 import time
+import hashlib
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -95,6 +96,14 @@ def generate_dh_keypair(p: int, g: int):
     R_pub = pow(g, R_pri, p)
     return R_pub, R_pri
 
+# def compute_shared_key(ur_pub: int, my_pri: int, p: int) -> int:
+#     return pow(ur_pub, my_pri, p)
+def compute_shared_key(ur_pub: int, my_pri: int, p: int) -> bytes:
+    shared_int = pow(ur_pub, my_pri, p)
+    shared_bytes = shared_int.to_bytes((shared_int.bit_length() + 7) // 8, "big")
+    derived_key = hashlib.sha256(shared_bytes).digest()
+    return derived_key
+
 def encrypt_message(public_key, message: bytes) :
     # Hybrid RSA-AES: encrypt a random AES key with the recipient's RSA public key,
     # then encrypt the message with AES-GCM. Receiver must know RSA key size and nonce length.
@@ -128,8 +137,6 @@ def decrypt_message(private_key, data: bytes):
     nonce = data[rsa_key_size:rsa_key_size + 12]
     ciphertext = data[rsa_key_size + 12:]
 
-    # print("here4")
-    # Recover AES key
     aes_key = private_key.decrypt(
         enc_key,
         padding.OAEP(
@@ -138,12 +145,8 @@ def decrypt_message(private_key, data: bytes):
             label=None
         )
     )
-    # print("here5")
     aesgcm = AESGCM(aes_key)
-    # print("here6")
     plaintext = aesgcm.decrypt(nonce, ciphertext, None)
-    # print("here7")
-    # print("# ", plaintext)
     return plaintext
 
 def hashyyy(hash_input):
@@ -152,35 +155,21 @@ def hashyyy(hash_input):
 
 #global_vars
 def session_establish_request(s: socket.socket, src_id: str, dst_id: str, private_key):
-    flag = b"01"
+    flag = b"1"
     ts_req = f"{time.time():024.6f}".encode()
-    print("# ts_req : ", len(ts_req))
 
-    # generate session key using DH
     p, g = get_dh_params()
-    R_pub, R_pri = generate_dh_keypair(p, g)
+    req_pub, req_pri = generate_dh_keypair(p, g)
 
-    R_pub_b = R_pub.to_bytes((R_pub.bit_length() + 7) // 8, "big")
-    # print("# R_pub_b : ", len(R_pub_b))
+    req_pub_b = req_pub.to_bytes((req_pub.bit_length() + 7) // 8, "big")
 
-    hash_input = ts_req + R_pub_b
+    hash_input = ts_req + req_pub_b
     hashed_msg = hashyyy(hash_input)
 
-    # sign_input = ts_req + b"|" + R_pub_b + b"|" + hashed_msg.to_bytes(32, "big", signed=True)
-
-    print(f"sign kortese {src_id}")
     signed_msg = hash_input + sign_message(private_key, hashed_msg)
-
-
-
-    # print("# msg: ", ts_req+R_pub_b)
-    # print("# msg: ", hashed_msg)
-    # print("# msg: ", sign_message(private_key, hashed_msg))
 
     dst_pub = load_public_key(dst_id)
     enc_msg = encrypt_message(dst_pub, signed_msg)
-
-    # print("# enc_msg: ", enc_msg)
 
     p_bytes = p.to_bytes((p.bit_length() + 7) // 8, "big")
     g_bytes = g.to_bytes((g.bit_length() + 7) // 8, "big")
@@ -196,7 +185,7 @@ def session_establish_request(s: socket.socket, src_id: str, dst_id: str, privat
 
     s.sendall(payload)
     print(f"[+] Session establishment request sent from {src_id} to {dst_id}")
-    return R_pub, R_pri
+    return req_pub, req_pri, p, g
 
 def handle_session_establish_request(data: bytes, src_id: str, dst_id: str, private_key):
 
@@ -204,92 +193,99 @@ def handle_session_establish_request(data: bytes, src_id: str, dst_id: str, priv
     g_bytes    = data[256:257]
     enc_msg    = data[257:]
 
-
-    # ---------- 2. Reconstruct DH parameters ----------
     p = int.from_bytes(p_bytes, "big")
     g = int.from_bytes(g_bytes, "big")
 
     signed_msg = decrypt_message(private_key, enc_msg)
 
     ts_req = signed_msg[:24]
-    R_pub_b = signed_msg[24:24+256]
+    req_pub_b = signed_msg[24:24+256]
     signed_part = signed_msg[24+256:]
 
-    # print("# ts_req: ", ts_req)
-    # print("# R_pub_b: ", R_pub_b)
-    # print("# signed_part: ", signed_part)
-    # msg = signed_msg[:18+256]
 
-    # print(f"sign kortese {src_id}")
-    # print("# msg: ", ts_req+R_pub_b)
-    # # print("# msg: ", hashyyy(ts_req+R_pub_b))
-    # print("# msg: ", signed_part)
-    # print()
-
-    # signed_msg format:
-    # ts_req | R_pub | hashed_msg
-    #
-    # But ts_req has variable length, R_pub has variable length, so the request
-    # used a "|" separator.
-
-    # print("de--------bisldkj")
-
-
-    valid_signature = verify_signature(load_public_key(src_id),hashyyy(ts_req+R_pub_b),signed_part)
+    valid_signature = verify_signature(load_public_key(src_id),hashyyy(ts_req+req_pub_b),signed_part)
     if valid_signature:
         print(f"[{dst_id}] Signature verification succeeded for request from {src_id}")
 
-    # ---------- 6. Reconstruct R_pub ----------
-    R_pub = int.from_bytes(R_pub_b, "big")
+    req_pub = int.from_bytes(req_pub_b, "big")
 
     if valid_signature == False:
         return None
 
+    return p, g, ts_req.decode(), req_pub
 
-    # shared_session_key = calculate_session_key(R_pub, R_pri, p)
-    return src_id, dst_id, p, g, ts_req.decode(), R_pub
+def session_establish_response(s: socket.socket, src_id: str, dst_id: str, private_key, res_pub):
+    flag = b"2"
+    ts_res = f"{time.time():024.6f}".encode()
 
-def session_establish_response(s: socket.socket, src_id: str, dst_id: str, private_key):
-    flag = b"10"
-    ts_req = str(time.time()).encode()
+    res_pub_b = res_pub.to_bytes((res_pub.bit_length() + 7) // 8, "big")
 
-    # generate session key using DH
-    p, g = get_dh_params()
-    R_pub, R_pri = generate_dh_keypair(p, g)
+    hash_input = ts_res + res_pub_b
+    hashed_msg = hashyyy(hash_input)
 
-    R_pub_b = R_pub.to_bytes((R_pub.bit_length() + 7) // 8, "big")
-
-    hash_input = ts_req + b"|" + R_pub_b
-    hashed_msg = hash(hash_input)
-
-    sign_input = ts_req + b"|" + R_pub_b + b"|" + hashed_msg.to_bytes(32, "big", signed=True)
-    signed_msg = sign_message(private_key, sign_input)
-
+    signed_msg = hash_input + sign_message(private_key, hashed_msg)
     dst_pub = load_public_key(dst_id)
+
     enc_msg = encrypt_message(dst_pub, signed_msg)
 
-    p_bytes = p.to_bytes((p.bit_length() + 7) // 8, "big")
-    g_bytes = g.to_bytes((g.bit_length() + 7) // 8, "big")
 
     payload = b"|".join([
         flag,
         src_id.encode(),
         dst_id.encode(),
-        p_bytes,
-        g_bytes,
         enc_msg
     ])
 
     s.sendall(payload)
     print(f"[+] Session establishment response sent from {src_id} to {dst_id}")
 
+def handle_session_establish_response(data: bytes, src_id: str, dst_id: str, private_key):
+
+    enc_msg    = data
+
+    signed_msg = decrypt_message(private_key, enc_msg)
+
+    ts_res = signed_msg[:24]
+    res_pub_b = signed_msg[24:24+256]
+    signed_part = signed_msg[24+256:]
+
+    valid_signature = verify_signature(load_public_key(src_id),hashyyy(ts_res+res_pub_b),signed_part)
+    if valid_signature:
+        print(f"[{dst_id}] Signature verification succeeded for request from {src_id}")
+
+    res_pub = int.from_bytes(res_pub_b, "big")
+
+    if valid_signature == False:
+        return None
+
+    return ts_res.decode(), res_pub
+
+def encrypt_with_shared_key(shared_key: bytes, plaintext: bytes) -> bytes:
+    """
+    Encrypt with AES-256-GCM.
+    shared_key = 32 bytes (256-bit)
+    Returns: nonce || ciphertext
+    """
+    if len(shared_key) != 32:
+        raise ValueError("shared_key must be 32 bytes (256-bit)")
+
+    aesgcm = AESGCM(shared_key)
+    nonce = os.urandom(12)     # GCM standard nonce length
+    ciphertext = aesgcm.encrypt(nonce, plaintext, None)
+    return nonce + ciphertext  # caller stores/transmits this
 
 
+def decrypt_with_shared_key(shared_key: bytes, data: bytes) -> bytes:
+    """
+    Decrypt AES-256-GCM.
+    Input = nonce || ciphertext
+    """
+    if len(shared_key) != 32:
+        raise ValueError("shared_key must be 32 bytes (256-bit)")
 
-def calculate_session_key(their_pub: int, my_pri: int, p: int) -> bytes:
-    print("Calculating session key..., their_pub : ", their_pub, ", my_pri : ", my_pri, ", p : ", p)
-    shared_secret = pow(their_pub, my_pri, p)
-    print("shared_secret : ", shared_secret)
-    session_key = shared_secret.to_bytes((shared_secret.bit_length() + 7) // 8, "big")
-    print("Session key calculated.")
-    return session_key
+    nonce = data[:12]
+    ciphertext = data[12:]
+
+    aesgcm = AESGCM(shared_key)
+    plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+    return plaintext

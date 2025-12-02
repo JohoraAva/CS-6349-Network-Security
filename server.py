@@ -29,7 +29,7 @@ def handle_client(c, addr):
             if not data:
                 return
             flag, rest = data.split(b"|", 1)
-            if flag == b"00":
+            if flag == b"0":
                 id, reg_msg, signed_msg = rest.split(b"|", 2)
                 id_str = id.decode()
                 print(f"[Relay] Registration request from {id_str}")
@@ -70,7 +70,6 @@ def handle_client(c, addr):
 
 
 def relay():
-    p, g = get_dh_params()
     s = socket.socket()
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind((HOST, PORT))
