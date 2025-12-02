@@ -97,23 +97,38 @@ def generate_dh_keypair(p: int, g: int):
     public_key = pow(g, private_key, p)
     return public_key, private_key
 
-def encrypt_message(public_key, message: bytes) :
-    # Hybrid RSA-AES: encrypt a random AES key with the recipient's RSA public key,
-    # then encrypt the message with AES-GCM. Receiver must know RSA key size and nonce length.
-    aes_key = os.urandom(32)  # 256-bit AES key
-    aesgcm = AESGCM(aes_key)
-    nonce = os.urandom(12)  # recommended 96-bit nonce for GCM
-    ciphertext = aesgcm.encrypt(nonce, message, None)
+# def encrypt_message(public_key, message: bytes) :
+#     # Hybrid RSA-AES: encrypt a random AES key with the recipient's RSA public key,
+#     # then encrypt the message with AES-GCM. Receiver must know RSA key size and nonce length.
+#     aes_key = os.urandom(32)  # 256-bit AES key
+#     aesgcm = AESGCM(aes_key)
+#     nonce = os.urandom(12)  # recommended 96-bit nonce for GCM
+#     ciphertext = aesgcm.encrypt(nonce, message, None)
 
-    enc_key = public_key.encrypt(
-        aes_key,
+#     enc_key = public_key.encrypt(
+#         aes_key,
+#         padding.OAEP(
+#             mgf=padding.MGF1(algorithm=hashes.SHA256()),
+#             algorithm=hashes.SHA256(),
+#             label=None
+#         )
+#     )
+#     return enc_key + nonce + ciphertext
+
+def encrypt_message(public_key, message: bytes) -> bytes:
+    """
+    Encrypt a message with RSA public key directly.
+    WARNING: Only works for small messages < key_size - padding overhead
+    """
+    ciphertext = public_key.encrypt(
+        message,
         padding.OAEP(
             mgf=padding.MGF1(algorithm=hashes.SHA256()),
             algorithm=hashes.SHA256(),
             label=None
         )
     )
-    return enc_key + nonce + ciphertext
+    return ciphertext
 
 def session_establish_request(s: socket.socket, src_id_str: str, dst_id_str: str, private_key) :
     flag = b"01"
