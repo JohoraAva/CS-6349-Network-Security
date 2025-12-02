@@ -1,7 +1,8 @@
 from utils import *
 
-  
-
+# Global variables  
+pub_key = None
+pri_key = None
 def send_registration(s: socket.socket, id: str, private_key):
     flag = b"00"
     id_bytes = id.encode()
@@ -41,21 +42,43 @@ def receive(s,private_key):
 
                 # p, g, enc = msg.split(b"|",2)
                 print(f"[{src_id}] Session establishment request received.")
-                print(handle_session_establish_request(msg, src_id, dst_id, private_key))
-                print("# eikhane ashche")
+                src_id, dst_id, p, g, ts_req, other_pub_key = handle_session_establish_request(msg, src_id, dst_id, private_key)
+                print("src_id : " + str(src_id) + ", dst_id : " + str(dst_id) + ", p : " + str(p) + ", g : " + str(g) + ", ts_req : " + str(ts_req) + ", other_pub_key : " + str(other_pub_key))
+                # print("# eikhane ashche")
                 # calculate session params
-                session_establish_response(s,dst_id,src_id,private_key)
+                global pri_key
+                print("global val(): ", pri_key)
+                print("value: ", other_pub_key, get_own_pri_key(), p)
+                # shared_key = calculate_session_key(other_pub_key, get_own_pri_key(), p)
+                # session_establish_response(s,dst_id,src_id,private_key)
+
+                print(f"[{dst_id}] Session established with {src_id}. Shared session key: {shared_key}")
             elif flag == b"10":
                 p, g, enc = msg.split(b"|",2)
                 print(f"[{src_id}] Session establishment response received.")
                 # verify session params
                 # calculate session params
+                shared_key = calculate_session_key(other_pub_key, get_own_pri_key(), p)
+                print(f"[{dst_id}] Session established with {src_id}. Shared session key: {shared_key}")
             elif flag == b"11":
                 print(f"\n[{src_id}]: {msg.decode()}\nid > ", end="")
             else:
                 print(f"[{src_id}] Invalid flag")
         except:
             break
+
+
+#global var, own_pri_key
+
+def set_own_pri_key(pri):
+    global pri_key
+    print("Setting own pri key: ", pri)
+    pri_key = pri
+
+def get_own_pri_key():
+    global pri_key
+    return pri_key
+
 
 def client():
     s, id, private_key = establish_socket()
@@ -73,8 +96,11 @@ def client():
             msg = ""
         else:
             msg = input("Message: ").strip()
-        if msg == "session init":
-            print(session_establish_request(s, id, dst_id, private_key))
+        if msg == "init":
+            global pub_key, pri_key
+            pub_key,  pri_key = session_establish_request(s, id, dst_id, private_key)
+            set_own_pri_key(pri_key)
+            print("init : "+str(pub_key)+", "+str(pri_key))
         else:
             s.sendall(f"11|{id}|{dst_id}|{msg}".encode())
         if dst_id.lower() == "exit":

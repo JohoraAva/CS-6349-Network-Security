@@ -113,15 +113,11 @@ def decrypt_message(private_key, data: bytes):
     """
 
     rsa_key_size = private_key.key_size // 8  # size in bytes (e.g., 2048 bits → 256 bytes)
-
-    print("here3")
-    print("here2")
-    print("here1")
     enc_key = data[:rsa_key_size]
     nonce = data[rsa_key_size:rsa_key_size + 12]
     ciphertext = data[rsa_key_size + 12:]
 
-    print("here4")
+    # print("here4")
     # Recover AES key
     aes_key = private_key.decrypt(
         enc_key,
@@ -131,17 +127,19 @@ def decrypt_message(private_key, data: bytes):
             label=None
         )
     )
-    print("here5")
+    # print("here5")
     aesgcm = AESGCM(aes_key)
-    print("here6")
+    # print("here6")
     plaintext = aesgcm.decrypt(nonce, ciphertext, None)
-    print("here7")
+    # print("here7")
     # print("# ", plaintext)
     return plaintext
 
 def hashyyy(hash_input):
     return hash_input
 
+
+#global_vars
 def session_establish_request(s: socket.socket, src_id: str, dst_id: str, private_key):
     flag = b"01"
     ts_req = f"{time.time():024.6f}".encode()
@@ -164,9 +162,9 @@ def session_establish_request(s: socket.socket, src_id: str, dst_id: str, privat
 
 
 
-    print("# msg: ", ts_req+R_pub_b)
-    print("# msg: ", hashed_msg)
-    print("# msg: ", sign_message(private_key, hashed_msg))
+    # print("# msg: ", ts_req+R_pub_b)
+    # print("# msg: ", hashed_msg)
+    # print("# msg: ", sign_message(private_key, hashed_msg))
 
     dst_pub = load_public_key(dst_id)
     enc_msg = encrypt_message(dst_pub, signed_msg)
@@ -188,7 +186,6 @@ def session_establish_request(s: socket.socket, src_id: str, dst_id: str, privat
     s.sendall(payload)
     print(f"[+] Session establishment request sent from {src_id} to {dst_id}")
     return R_pub, R_pri
-
 
 def handle_session_establish_request(data: bytes, src_id: str, dst_id: str, private_key):
 
@@ -212,11 +209,11 @@ def handle_session_establish_request(data: bytes, src_id: str, dst_id: str, priv
     # print("# signed_part: ", signed_part)
     # msg = signed_msg[:18+256]
 
-    print(f"sign kortese {src_id}")
-    print("# msg: ", ts_req+R_pub_b)
-    # print("# msg: ", hashyyy(ts_req+R_pub_b))
-    print("# msg: ", signed_part)
-    print()
+    # print(f"sign kortese {src_id}")
+    # print("# msg: ", ts_req+R_pub_b)
+    # # print("# msg: ", hashyyy(ts_req+R_pub_b))
+    # print("# msg: ", signed_part)
+    # print()
 
     # signed_msg format:
     # ts_req | R_pub | hashed_msg
@@ -224,10 +221,12 @@ def handle_session_establish_request(data: bytes, src_id: str, dst_id: str, priv
     # But ts_req has variable length, R_pub has variable length, so the request
     # used a "|" separator.
 
-    print("de--------bisldkj")
+    # print("de--------bisldkj")
 
 
     valid_signature = verify_signature(load_public_key(src_id),hashyyy(ts_req+R_pub_b),signed_part)
+    if valid_signature:
+        print(f"[{dst_id}] Signature verification succeeded for request from {src_id}")
 
     # ---------- 6. Reconstruct R_pub ----------
     R_pub = int.from_bytes(R_pub_b, "big")
@@ -235,7 +234,9 @@ def handle_session_establish_request(data: bytes, src_id: str, dst_id: str, priv
     if valid_signature == False:
         return None
 
-    return src_id, dst_id, p, g, ts_req.decode()
+
+    # shared_session_key = calculate_session_key(R_pub, R_pri, p)
+    return src_id, dst_id, p, g, ts_req.decode(), R_pub
 
 def session_establish_response(s: socket.socket, src_id: str, dst_id: str, private_key):
     flag = b"10"
@@ -270,3 +271,14 @@ def session_establish_response(s: socket.socket, src_id: str, dst_id: str, priva
 
     s.sendall(payload)
     print(f"[+] Session establishment response sent from {src_id} to {dst_id}")
+
+
+
+
+def calculate_session_key(their_pub: int, my_pri: int, p: int) -> bytes:
+    print("Calculating session key..., their_pub : ", their_pub, ", my_pri : ", my_pri, ", p : ", p)
+    shared_secret = pow(their_pub, my_pri, p)
+    print("shared_secret : ", shared_secret)
+    session_key = shared_secret.to_bytes((shared_secret.bit_length() + 7) // 8, "big")
+    print("Session key calculated.")
+    return session_key
