@@ -30,7 +30,7 @@ def send_registration(s: socket.socket, src_id: str, private_key):
 
 
 def establish_socket():
-    id = input("Enter your id (Alice/Bob): ").strip()
+    id = input("Enter your id (Alice/Bob): ").strip().capitalize()
     private_key = load_private_key(id)
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.connect((HOST, PORT))
@@ -42,8 +42,8 @@ def receive(s,private_key):
         try:
             data = s.recv(4096)
             flag,src_id_b,dst_id_b, msg = data.split(b"|", 3)
-            src_id = src_id_b.decode()
-            dst_id = dst_id_b.decode()
+            src_id = src_id_b.decode().capitalize()
+            dst_id = dst_id_b.decode().capitalize()
             if flag == b"1":
                 print(f"[{src_id}] Session establishment request received.")
                 #p,g, requester's timestamp, requester's public key
@@ -55,7 +55,10 @@ def receive(s,private_key):
                     # Generate responder key pair
                     res_pub, res_pri = generate_dh_keypair(p[src_id], g[src_id])
                     session_keys[src_id] = compute_shared_key(req_pub,res_pri,p[src_id])
-                session_establish_response(s,dst_id,src_id,private_key,res_pub)
+                enc_msg = session_establish_request(s, dst_id, src_id, private_key, res_pub)
+                payload = b"|".join([b"2",dst_id.encode(),src_id.encode(),enc_msg])
+                s.sendall(payload)
+                print(f"[+] Session establishment response sent from {dst_id} to {src_id}")
                 with lock:
                     print(f"[{dst_id}] Session established with {src_id}. Shared session key: {session_keys[src_id]}")
             elif flag == b"2":
@@ -85,7 +88,7 @@ def client():
     threading.Thread(target=receive, args=(s,private_key,), daemon=True).start()
 
     while True:
-        dst_id = input("id > ").strip()
+        dst_id = input("id > ").strip().capitalize()
         if dst_id.lower() == "exit":
             print("Exiting...")
             exit(0)
@@ -94,11 +97,20 @@ def client():
             msg = input("Message: ").strip()
         if msg == "init_session":
             # global pub_key, pri_key
-            req_pub,  req_pri_, p_, g_ = session_establish_request(s, id, dst_id, private_key, True)
+            p_, g_ = get_dh_params()
+            req_pub, req_pri_ = generate_dh_keypair(p_, g_)
+            enc_msg = session_establish_request(s, id, dst_id, private_key, req_pub, True)
+
+            p_bytes = p_.to_bytes((p_.bit_length() + 7) // 8, "big")
+            g_bytes = g_.to_bytes((g_.bit_length() + 7) // 8, "big")
+           
+            payload = b"|".join([b"1",id.encode(),dst_id.encode(),p_bytes+g_bytes+enc_msg])
+            s.sendall(payload)
+            print(f"[+] Session establishment request sent from {id} to {dst_id}")
             with lock:
-                req_pri[dst_id] = req_pri_
-                p[dst_id] = p_
-                g[dst_id] = g_
+                req_pri[dst_id.capitalize()] = req_pri_
+                p[dst_id.capitalize()] = p_
+                g[dst_id.capitalize()] = g_
         else:
             with lock:
                 sk = session_keys.get(dst_id)

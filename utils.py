@@ -66,6 +66,8 @@ def load_public_key(id: str):
 
 
 
+
+
 def sign_message(private_key, message: bytes) -> bytes:
     return private_key.sign(message, padding.PKCS1v15(), hashes.SHA256())
 
@@ -76,6 +78,8 @@ def verify_signature(public_key, message: bytes, signature: bytes) -> bool:
     except Exception:
         return False
     
+
+
 
 
 
@@ -101,12 +105,6 @@ def generate_dh_keypair(p: int, g: int):
     R_pri = int.from_bytes(os.urandom(256), byteorder='big') % p
     R_pub = pow(g, R_pri, p)
     return R_pub, R_pri
-
-def compute_shared_key(ur_pub: int, my_pri: int, p: int) -> bytes:
-    shared_int = pow(ur_pub, my_pri, p)
-    shared_bytes = shared_int.to_bytes((shared_int.bit_length() + 7) // 8, "big")
-    derived_key = hashlib.sha256(shared_bytes).digest()
-    return derived_key
 
 def encrypt_message(public_key, message: bytes) : #rsa encryption
     # Hybrid RSA-AES: encrypt a random AES key with the recipient's RSA public key,
@@ -156,43 +154,32 @@ def decrypt_message(private_key, data: bytes): #rsa decryption
     plaintext = aesgcm.decrypt(nonce, ciphertext, None)
     return plaintext
 
-def hashyyy(hash_input):
-    return hash_input
 
 
-def session_establish_request(s: socket.socket, src_id: str, dst_id: str, private_key, is_req: bool =False):
+
+
+
+def _hash_sha256(hash_input):
+    return hashlib.sha256(hash_input).hexdigest().encode()
+
+def session_establish_request(s: socket.socket, src_id: str, dst_id: str, private_key, pub_key, is_req: bool =False):
     flag = b"1"
     ts_req = f"{time.time():024.6f}".encode()
 
-    if is_req:
-        p, g = get_dh_params()
-        req_pub, req_pri = generate_dh_keypair(p, g)
 
-    req_pub_b = req_pub.to_bytes((req_pub.bit_length() + 7) // 8, "big")
+    pub_key_b = pub_key.to_bytes((pub_key.bit_length() + 7) // 8, "big")
 
-    hash_input = ts_req + req_pub_b
-    hashed_msg = hashyyy(hash_input)
+    hash_input = ts_req + pub_key_b
+    hashed_msg = _hash_sha256(hash_input)
 
     signed_msg = hash_input + sign_message(private_key, hashed_msg)
 
     dst_pub = load_public_key(dst_id)
     enc_msg = encrypt_message(dst_pub, signed_msg)
 
-    p_bytes = p.to_bytes((p.bit_length() + 7) // 8, "big")
-    g_bytes = g.to_bytes((g.bit_length() + 7) // 8, "big")
+   
+    return enc_msg
 
-    payload = b"|".join([
-        flag,
-        src_id.encode(),
-        dst_id.encode(),
-        p_bytes+
-        g_bytes+
-        enc_msg
-    ])
-
-    s.sendall(payload)
-    print(f"[+] Session establishment request sent from {src_id} to {dst_id}")
-    return req_pub, req_pri, p, g
 
 def handle_session_establish_request(data: bytes, src_id: str, dst_id: str, private_key, is_req: bool = False):
 
@@ -214,7 +201,7 @@ def handle_session_establish_request(data: bytes, src_id: str, dst_id: str, priv
     signed_part = signed_msg[24+256:]
 
 
-    valid_signature = verify_signature(load_public_key(src_id),hashyyy(ts_req+req_pub_b),signed_part)
+    valid_signature = verify_signature(load_public_key(src_id),_hash_sha256(ts_req+req_pub_b),signed_part)
     if valid_signature:
         print(f"[{dst_id}] Signature verification succeeded for request from {src_id}")
 
@@ -225,51 +212,21 @@ def handle_session_establish_request(data: bytes, src_id: str, dst_id: str, priv
 
     return ts_req.decode(), req_pub
 
-def session_establish_response(s: socket.socket, src_id: str, dst_id: str, private_key, res_pub):
-    flag = b"2"
-    ts_res = f"{time.time():024.6f}".encode()
-
-    res_pub_b = res_pub.to_bytes((res_pub.bit_length() + 7) // 8, "big")
-
-    hash_input = ts_res + res_pub_b
-    hashed_msg = hashyyy(hash_input)
-
-    signed_msg = hash_input + sign_message(private_key, hashed_msg)
-    dst_pub = load_public_key(dst_id)
-
-    enc_msg = encrypt_message(dst_pub, signed_msg)
 
 
-    payload = b"|".join([
-        flag,
-        src_id.encode(),
-        dst_id.encode(),
-        enc_msg
-    ])
 
-    s.sendall(payload)
-    print(f"[+] Session establishment response sent from {src_id} to {dst_id}")
 
-# def handle_session_establish_response(data: bytes, src_id: str, dst_id: str, private_key):
 
-#     enc_msg    = data
+def compute_shared_key(ur_pub: int, my_pri: int, p: int) -> bytes:
+    shared_int = pow(ur_pub, my_pri, p)
+    shared_bytes = shared_int.to_bytes((shared_int.bit_length() + 7) // 8, "big")
+    derived_key = hashlib.sha256(shared_bytes).digest()
+    return derived_key
 
-#     signed_msg = decrypt_message(private_key, enc_msg)
 
-#     ts_res = signed_msg[:24]
-#     res_pub_b = signed_msg[24:24+256]
-#     signed_part = signed_msg[24+256:]
 
-#     valid_signature = verify_signature(load_public_key(src_id),hashyyy(ts_res+res_pub_b),signed_part)
-#     if valid_signature:
-#         print(f"[{dst_id}] Signature verification succeeded for request from {src_id}")
 
-#     res_pub = int.from_bytes(res_pub_b, "big")
 
-#     if valid_signature == False:
-#         return None
-
-#     return ts_res.decode(), res_pub
 
 def _hmac_sha256(key: bytes, data: bytes) -> bytes:
     return hmac.new(key, data, hashlib.sha256).digest()
@@ -280,11 +237,6 @@ def derive_count0(session_key: bytes, message_index: int = 0) -> int:
     digest = _hmac_sha256(session_key, msg)
     # reduce to 64-bit integer to be a practical counter
     return int.from_bytes(digest[:8], "big")
-
-
-
-BLOCK_SIZE = 32  # AES block size in bytes
-
 
 def generate_keystream(session_key: bytes, nonce: bytes, count0: int, n_blocks: int) -> bytes:
     """
@@ -312,7 +264,7 @@ def hmac_ctr_encrypt(session_key: bytes,plaintext: bytes, message_index: int = 0
     msg_with_ts = ts_bytes + len(plaintext).to_bytes(4, "big") + plaintext
 
     # hash msg
-    hashed_msg = hashyyy(msg_with_ts)
+    hashed_msg = _hash_sha256(msg_with_ts)
     msg_to_encrypt =  msg_with_ts + hashed_msg
 
     # split into blocks of BLOCK_SIZE
@@ -324,9 +276,6 @@ def hmac_ctr_encrypt(session_key: bytes,plaintext: bytes, message_index: int = 0
     ciphertext = bytes(a ^ b for a, b in zip(msg_to_encrypt, keystream[: len(msg_to_encrypt)]))
 
     return nonce + ciphertext
-    
-
-
 
 def hmac_ctr_decrypt(session_key: bytes,cipher: bytes, msg_idx : int = 0): #decrypt with session key
     # decrypt ciphertext
@@ -350,7 +299,7 @@ def hmac_ctr_decrypt(session_key: bytes,cipher: bytes, msg_idx : int = 0): #decr
     plaintext = recovered[12:12+len_plaintext]
 
     # verify hash
-    hashed_msg = hashyyy(recovered[:12+len_plaintext])
+    hashed_msg = _hash_sha256(recovered[:12+len_plaintext])
     if hashed_msg != recovered[12+len_plaintext:]:
         return False, ts, None, "Hash verification failed"
 
@@ -363,35 +312,3 @@ def hmac_ctr_decrypt(session_key: bytes,cipher: bytes, msg_idx : int = 0): #decr
             return False, ts, None, f"Stale timestamp (age {now-ts}s > {max_age_seconds}s)"
 
     return plaintext
-
-
-
-# def encrypt_with_shared_key(shared_key: bytes, plaintext: bytes) -> bytes:
-#     """
-#     Encrypt with AES-256-GCM.
-#     shared_key = 32 bytes (256-bit)
-#     Returns: nonce || ciphertext
-#     """
-#     if len(shared_key) != 32:
-#         raise ValueError("shared_key must be 32 bytes (256-bit)")
-
-#     aesgcm = AESGCM(shared_key)
-#     nonce = os.urandom(12)     # GCM standard nonce length
-#     ciphertext = aesgcm.encrypt(nonce, plaintext, None)
-#     return nonce + ciphertext  # caller stores/transmits this
-
-
-# def decrypt_with_shared_key(shared_key: bytes, data: bytes) -> bytes:
-#     """
-#     Decrypt AES-256-GCM.
-#     Input = nonce || ciphertext
-#     """
-#     if len(shared_key) != 32:
-#         raise ValueError("shared_key must be 32 bytes (256-bit)")
-
-#     nonce = data[:12]
-#     ciphertext = data[12:]
-
-#     aesgcm = AESGCM(shared_key)
-#     plaintext = aesgcm.decrypt(nonce, ciphertext, None)
-#     return plaintext
