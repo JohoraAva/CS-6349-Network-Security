@@ -9,16 +9,16 @@ g = {}
 lock = threading.Lock()
 
 
-def send_registration(s: socket.socket, id: str, private_key):
+def send_registration(s: socket.socket, src_id: str, private_key):
     flag = b"0"
-    id_bytes = id.encode()
-    reg_msg = b"Registration info for " + id_bytes
+    src_id_bytes = src_id.encode()
+    reg_msg = b"Registration info for " + src_id_bytes
     signed_msg = sign_message(private_key, reg_msg)
-    payload = flag + b"|" + id_bytes + b"|" + reg_msg + b"|" + signed_msg
+    payload = flag + b"|" + src_id_bytes + b"|" + reg_msg + b"|" + signed_msg
     s.sendall(payload)
-    print(f"[+] Registration request sent by {id}")
+    print(f"[+] Registration request sent by {src_id}")
     data = s.recv(4096)  # wait for response
-    # print("hello2: ", data.decode())
+
     flag, sender_id, resp_msg, signed_resp = data.split(b"|", 3)
     sender_id_str = sender_id.decode()
     if verify_signature(load_public_key(sender_id_str), resp_msg, signed_resp):
@@ -45,12 +45,14 @@ def receive(s,private_key):
             src_id = src_id_b.decode()
             dst_id = dst_id_b.decode()
             if flag == b"1":
-
                 print(f"[{src_id}] Session establishment request received.")
-                p_, g_, ts_req, req_pub = handle_session_establish_request(msg, src_id, dst_id, private_key)
+                #p,g, requester's timestamp, requester's public key
+                p_, g_ = get_dh_params()
+                ts_req, req_pub = handle_session_establish_request(msg, src_id, dst_id, private_key, True)
                 with lock:
                     p[src_id] = p_
                     g[src_id] = g_
+                    # Generate responder key pair
                     res_pub, res_pri = generate_dh_keypair(p[src_id], g[src_id])
                     session_keys[src_id] = compute_shared_key(req_pub,res_pri,p[src_id])
                 session_establish_response(s,dst_id,src_id,private_key,res_pub)
@@ -58,13 +60,14 @@ def receive(s,private_key):
                     print(f"[{dst_id}] Session established with {src_id}. Shared session key: {session_keys[src_id]}")
             elif flag == b"2":
                 print(f"[{src_id}] Session establishment response received.")
-                ts_res, res_pub = handle_session_establish_response(msg, src_id, dst_id, private_key)
+                ts_res, res_pub = handle_session_establish_request(msg, src_id, dst_id, private_key)
                 with lock:
                     session_keys[src_id] = compute_shared_key(res_pub,req_pri[src_id],p[src_id])
                     print(f"[{dst_id}] Session established with {src_id}. Shared session key: {session_keys[src_id]}")
             elif flag == b"3":
                 with lock:
-                    msg = decrypt_with_shared_key(session_keys[src_id],msg)
+                    # received encrypted message
+                    msg = hmac_ctr_decrypt(session_keys[src_id],msg)
                 print(f"\n[{src_id}]: {msg.decode()}\nid > ", end="")
             else:
                 print(f"[{src_id}] Invalid flag")
@@ -85,12 +88,13 @@ def client():
         dst_id = input("id > ").strip()
         if dst_id.lower() == "exit":
             print("Exiting...")
+            exit(0)
             msg = ""
         else:
             msg = input("Message: ").strip()
-        if msg == "init":
+        if msg == "init_session":
             # global pub_key, pri_key
-            req_pub,  req_pri_, p_, g_ = session_establish_request(s, id, dst_id, private_key)
+            req_pub,  req_pri_, p_, g_ = session_establish_request(s, id, dst_id, private_key, True)
             with lock:
                 req_pri[dst_id] = req_pri_
                 p[dst_id] = p_
@@ -102,8 +106,8 @@ def client():
                 print(f"[!] Please establish session keys with {dst_id} first")
             else:
                 with lock:
-                    cipher = encrypt_with_shared_key(session_keys[dst_id],msg.encode())
-                s.sendall(f"3|{id}|{dst_id}|".encode()+cipher)
+                    ciphertext = hmac_ctr_encrypt(session_keys[dst_id],msg.encode())
+                s.sendall(f"3|{id}|{dst_id}|".encode()+ciphertext)
         if dst_id.lower() == "exit":
             break
     s.close()

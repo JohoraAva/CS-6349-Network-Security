@@ -7,11 +7,19 @@ import hashlib
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from typing import Tuple, Optional
+import hmac
+import math
 
 HOST = '127.0.0.1'
 PORT = 5552
 KEYS_DIR = "keys"
 RELAY_PRIVATE_KEY_PATH = "keys/relay_rsa"
+
+#global variables
+lock = threading.Lock()
+BLOCK_SIZE = 32  # AES block size in bytes
+max_age_seconds = 60 # maximum age for timestamps in seconds
 
 def ensure_keys_exist(id: str):
     os.makedirs(KEYS_DIR, exist_ok=True)
@@ -48,6 +56,16 @@ def load_private_key(id: str):
     with open(private_key_path, "rb") as key_file:
         return serialization.load_pem_private_key(key_file.read(), password=None)
 
+
+def load_public_key(id: str):
+    public_key_path = os.path.join(KEYS_DIR, f"{id.lower()}_rsa.pub")
+    with open(public_key_path, "rb") as key_file:
+        return serialization.load_pem_public_key(key_file.read())
+
+
+
+
+
 def sign_message(private_key, message: bytes) -> bytes:
     return private_key.sign(message, padding.PKCS1v15(), hashes.SHA256())
 
@@ -58,21 +76,9 @@ def verify_signature(public_key, message: bytes, signature: bytes) -> bool:
     except Exception:
         return False
     
-def load_public_key(id: str):
-    public_key_path = os.path.join(KEYS_DIR, f"{id.lower()}_rsa.pub")
-    with open(public_key_path, "rb") as key_file:
-        return serialization.load_pem_public_key(key_file.read())
 
 
 
-def socket_close(sock: socket.socket):
-    try:
-        sock.shutdown(socket.SHUT_RDWR)
-    except Exception as e:
-        print(f"[SocketClose] Error during shutdown: {e}")
-    finally:
-        sock.close()
-        print("[SocketClose] Socket closed.")
 
 def get_dh_params():
     # Using predefined 2048-bit MODP Group from RFC 3526
@@ -96,17 +102,17 @@ def generate_dh_keypair(p: int, g: int):
     R_pub = pow(g, R_pri, p)
     return R_pub, R_pri
 
-# def compute_shared_key(ur_pub: int, my_pri: int, p: int) -> int:
-#     return pow(ur_pub, my_pri, p)
 def compute_shared_key(ur_pub: int, my_pri: int, p: int) -> bytes:
     shared_int = pow(ur_pub, my_pri, p)
     shared_bytes = shared_int.to_bytes((shared_int.bit_length() + 7) // 8, "big")
     derived_key = hashlib.sha256(shared_bytes).digest()
     return derived_key
 
-def encrypt_message(public_key, message: bytes) :
+def encrypt_message(public_key, message: bytes) : #rsa encryption
     # Hybrid RSA-AES: encrypt a random AES key with the recipient's RSA public key,
     # then encrypt the message with AES-GCM. Receiver must know RSA key size and nonce length.
+
+
     aes_key = os.urandom(32)  # 256-bit AES key
     aesgcm = AESGCM(aes_key)
     nonce = os.urandom(12)  # recommended 96-bit nonce for GCM
@@ -122,7 +128,7 @@ def encrypt_message(public_key, message: bytes) :
     )
     return enc_key + nonce + ciphertext
 
-def decrypt_message(private_key, data: bytes):
+def decrypt_message(private_key, data: bytes): #rsa decryption
     """
     Reverse of encrypt_message():
     data format = enc_key || nonce || ciphertext
@@ -132,6 +138,7 @@ def decrypt_message(private_key, data: bytes):
     - ciphertext: AES-GCM encrypted payload
     """
 
+    #split data
     rsa_key_size = private_key.key_size // 8  # size in bytes (e.g., 2048 bits → 256 bytes)
     enc_key = data[:rsa_key_size]
     nonce = data[rsa_key_size:rsa_key_size + 12]
@@ -153,13 +160,13 @@ def hashyyy(hash_input):
     return hash_input
 
 
-#global_vars
-def session_establish_request(s: socket.socket, src_id: str, dst_id: str, private_key):
+def session_establish_request(s: socket.socket, src_id: str, dst_id: str, private_key, is_req: bool =False):
     flag = b"1"
     ts_req = f"{time.time():024.6f}".encode()
 
-    p, g = get_dh_params()
-    req_pub, req_pri = generate_dh_keypair(p, g)
+    if is_req:
+        p, g = get_dh_params()
+        req_pub, req_pri = generate_dh_keypair(p, g)
 
     req_pub_b = req_pub.to_bytes((req_pub.bit_length() + 7) // 8, "big")
 
@@ -187,15 +194,19 @@ def session_establish_request(s: socket.socket, src_id: str, dst_id: str, privat
     print(f"[+] Session establishment request sent from {src_id} to {dst_id}")
     return req_pub, req_pri, p, g
 
-def handle_session_establish_request(data: bytes, src_id: str, dst_id: str, private_key):
+def handle_session_establish_request(data: bytes, src_id: str, dst_id: str, private_key, is_req: bool = False):
 
-    p_bytes    = data[:256]
-    g_bytes    = data[256:257]
-    enc_msg    = data[257:]
+    if is_req:
+        p_bytes    = data[:256]
+        g_bytes    = data[256:257]
+        enc_msg    = data[257:]
 
-    p = int.from_bytes(p_bytes, "big")
-    g = int.from_bytes(g_bytes, "big")
+        p = int.from_bytes(p_bytes, "big")
+        g = int.from_bytes(g_bytes, "big")
+    else:
+        enc_msg    = data
 
+    
     signed_msg = decrypt_message(private_key, enc_msg)
 
     ts_req = signed_msg[:24]
@@ -212,7 +223,7 @@ def handle_session_establish_request(data: bytes, src_id: str, dst_id: str, priv
     if valid_signature == False:
         return None
 
-    return p, g, ts_req.decode(), req_pub
+    return ts_req.decode(), req_pub
 
 def session_establish_response(s: socket.socket, src_id: str, dst_id: str, private_key, res_pub):
     flag = b"2"
@@ -239,53 +250,148 @@ def session_establish_response(s: socket.socket, src_id: str, dst_id: str, priva
     s.sendall(payload)
     print(f"[+] Session establishment response sent from {src_id} to {dst_id}")
 
-def handle_session_establish_response(data: bytes, src_id: str, dst_id: str, private_key):
+# def handle_session_establish_response(data: bytes, src_id: str, dst_id: str, private_key):
 
-    enc_msg    = data
+#     enc_msg    = data
 
-    signed_msg = decrypt_message(private_key, enc_msg)
+#     signed_msg = decrypt_message(private_key, enc_msg)
 
-    ts_res = signed_msg[:24]
-    res_pub_b = signed_msg[24:24+256]
-    signed_part = signed_msg[24+256:]
+#     ts_res = signed_msg[:24]
+#     res_pub_b = signed_msg[24:24+256]
+#     signed_part = signed_msg[24+256:]
 
-    valid_signature = verify_signature(load_public_key(src_id),hashyyy(ts_res+res_pub_b),signed_part)
-    if valid_signature:
-        print(f"[{dst_id}] Signature verification succeeded for request from {src_id}")
+#     valid_signature = verify_signature(load_public_key(src_id),hashyyy(ts_res+res_pub_b),signed_part)
+#     if valid_signature:
+#         print(f"[{dst_id}] Signature verification succeeded for request from {src_id}")
 
-    res_pub = int.from_bytes(res_pub_b, "big")
+#     res_pub = int.from_bytes(res_pub_b, "big")
 
-    if valid_signature == False:
-        return None
+#     if valid_signature == False:
+#         return None
 
-    return ts_res.decode(), res_pub
+#     return ts_res.decode(), res_pub
 
-def encrypt_with_shared_key(shared_key: bytes, plaintext: bytes) -> bytes:
+def _hmac_sha256(key: bytes, data: bytes) -> bytes:
+    return hmac.new(key, data, hashlib.sha256).digest()
+
+def derive_count0(session_key: bytes, message_index: int = 0) -> int:
+    # calculate count0 = HMAC(session_key, "count0" || message_index)
+    msg = b"count0" + message_index.to_bytes(4, "big")
+    digest = _hmac_sha256(session_key, msg)
+    # reduce to 64-bit integer to be a practical counter
+    return int.from_bytes(digest[:8], "big")
+
+
+
+BLOCK_SIZE = 32  # AES block size in bytes
+
+
+def generate_keystream(session_key: bytes, nonce: bytes, count0: int, n_blocks: int) -> bytes:
     """
-    Encrypt with AES-256-GCM.
-    shared_key = 32 bytes (256-bit)
-    Returns: nonce || ciphertext
+    Generate n_blocks * BLOCK_SIZE bytes of keystream by computing
+    Ksi = HMAC(session_key, nonce || counti_bytes) for i in [0..n_blocks-1].
+    counti_bytes is 8-byte big-endian.
     """
-    if len(shared_key) != 32:
-        raise ValueError("shared_key must be 32 bytes (256-bit)")
+    ks = bytearray()
+    for i in range(n_blocks):
+        counti = count0 + i
+        data = nonce + int.to_bytes(counti, 8, "big")
+        ks_block = _hmac_sha256(session_key, data)
+        ks.extend(ks_block)
+    return bytes(ks[: n_blocks * BLOCK_SIZE])
 
-    aesgcm = AESGCM(shared_key)
-    nonce = os.urandom(12)     # GCM standard nonce length
-    ciphertext = aesgcm.encrypt(nonce, plaintext, None)
-    return nonce + ciphertext  # caller stores/transmits this
 
-
-def decrypt_with_shared_key(shared_key: bytes, data: bytes) -> bytes:
+def hmac_ctr_encrypt(session_key: bytes,plaintext: bytes, message_index: int = 0): #encrypt with session key
     """
-    Decrypt AES-256-GCM.
-    Input = nonce || ciphertext
+    Encrypt plaintext using HMAC-CTR with timestamp prefix.
     """
-    if len(shared_key) != 32:
-        raise ValueError("shared_key must be 32 bytes (256-bit)")
+    nonce = os.urandom(16)  # 128-bit nonce; size can be adjusted
+    ts = int(time.time())  # unix seconds
+    # Format timestamp as 8-byte big-endian integer
+    ts_bytes = ts.to_bytes(8, "big")
+    msg_with_ts = ts_bytes + len(plaintext).to_bytes(4, "big") + plaintext
 
-    nonce = data[:12]
-    ciphertext = data[12:]
+    # hash msg
+    hashed_msg = hashyyy(msg_with_ts)
+    msg_to_encrypt =  msg_with_ts + hashed_msg
 
-    aesgcm = AESGCM(shared_key)
-    plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+    # split into blocks of BLOCK_SIZE
+    n_blocks = math.ceil(len(msg_to_encrypt) / BLOCK_SIZE)
+    count0 = derive_count0(session_key, message_index)
+    keystream = generate_keystream(session_key, nonce, count0, n_blocks)
+
+    # XOR to produce ciphertext
+    ciphertext = bytes(a ^ b for a, b in zip(msg_to_encrypt, keystream[: len(msg_to_encrypt)]))
+
+    return nonce + ciphertext
+    
+
+
+
+def hmac_ctr_decrypt(session_key: bytes,cipher: bytes, msg_idx : int = 0): #decrypt with session key
+    # decrypt ciphertext
+
+    nonce = cipher[:16]
+    ciphertext = cipher[16:]
+    # Recompute count0 and mac to verify
+    count0 = derive_count0(session_key, 0)
+   
+    # compute keystream and XOR to recover ts||plaintext
+    n_blocks = math.ceil(len(ciphertext) / BLOCK_SIZE)
+    keystream = generate_keystream(session_key, nonce, count0, n_blocks)
+    recovered = bytes(a ^ b for a, b in zip(ciphertext, keystream[: len(ciphertext)]))
+
+    if len(recovered) < 8:
+        return False, None, None, "Recovered message too short to contain timestamp"
+
+    ts_bytes = recovered[:8]
+    ts = int.from_bytes(ts_bytes, "big")
+    len_plaintext = int.from_bytes(recovered[8:12], "big")
+    plaintext = recovered[12:12+len_plaintext]
+
+    # verify hash
+    hashed_msg = hashyyy(recovered[:12+len_plaintext])
+    if hashed_msg != recovered[12+len_plaintext:]:
+        return False, ts, None, "Hash verification failed"
+
+    # check timestamp freshness
+    if max_age_seconds is not None:
+        now = int(time.time())
+        if ts > now + 5:
+            return False, ts, None, "Timestamp is from the future"
+        if now - ts > max_age_seconds:
+            return False, ts, None, f"Stale timestamp (age {now-ts}s > {max_age_seconds}s)"
+
     return plaintext
+
+
+
+# def encrypt_with_shared_key(shared_key: bytes, plaintext: bytes) -> bytes:
+#     """
+#     Encrypt with AES-256-GCM.
+#     shared_key = 32 bytes (256-bit)
+#     Returns: nonce || ciphertext
+#     """
+#     if len(shared_key) != 32:
+#         raise ValueError("shared_key must be 32 bytes (256-bit)")
+
+#     aesgcm = AESGCM(shared_key)
+#     nonce = os.urandom(12)     # GCM standard nonce length
+#     ciphertext = aesgcm.encrypt(nonce, plaintext, None)
+#     return nonce + ciphertext  # caller stores/transmits this
+
+
+# def decrypt_with_shared_key(shared_key: bytes, data: bytes) -> bytes:
+#     """
+#     Decrypt AES-256-GCM.
+#     Input = nonce || ciphertext
+#     """
+#     if len(shared_key) != 32:
+#         raise ValueError("shared_key must be 32 bytes (256-bit)")
+
+#     nonce = data[:12]
+#     ciphertext = data[12:]
+
+#     aesgcm = AESGCM(shared_key)
+#     plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+#     return plaintext
