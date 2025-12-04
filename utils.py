@@ -162,6 +162,15 @@ def decrypt_message(private_key, data: bytes): #rsa decryption
 def _hash_sha256(hash_input):
     return hashlib.sha256(hash_input).hexdigest().encode()
 
+
+def check_timestamp_freshness(ts: int) -> bool:
+    now = int(time.time())
+    if ts > now + 5:
+        return False
+    if now - ts > max_age_seconds:
+        return False
+    return True
+
 def session_establish_request(s: socket.socket, src_id: str, dst_id: str, private_key, pub_key, is_req: bool =False):
     flag = b"1"
     ts_req = f"{time.time():024.6f}".encode()
@@ -201,6 +210,11 @@ def handle_session_establish_request(data: bytes, src_id: str, dst_id: str, priv
     signed_part = signed_msg[24+256:]
 
 
+    #verify ts freshness
+    if not check_timestamp_freshness(int(float(ts_req.decode()))):
+        return None
+
+    #verify signature
     valid_signature = verify_signature(load_public_key(src_id),_hash_sha256(ts_req+req_pub_b),signed_part)
     if valid_signature:
         print(f"[{dst_id}] Signature verification succeeded for request from {src_id}")
@@ -304,11 +318,7 @@ def hmac_ctr_decrypt(session_key: bytes,cipher: bytes, msg_idx : int = 0): #decr
         return False, ts, None, "Hash verification failed"
 
     # check timestamp freshness
-    if max_age_seconds is not None:
-        now = int(time.time())
-        if ts > now + 5:
-            return False, ts, None, "Timestamp is from the future"
-        if now - ts > max_age_seconds:
-            return False, ts, None, f"Stale timestamp (age {now-ts}s > {max_age_seconds}s)"
+    if not check_timestamp_freshness(ts):
+        return False, ts, None, "Timestamp not fresh"
 
     return plaintext
